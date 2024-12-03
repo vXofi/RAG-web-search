@@ -10,6 +10,7 @@ import torch
 import re
 import os
 from llama_cpp import Llama
+from datetime import datetime
 
 
 """
@@ -18,7 +19,8 @@ handle accuweather (???)
 handle retrieved context length > model context length
 add ranking of smaller fragments over entire pages
 maybe fix input
-
+length in tokens is different depending on used language
+phi 3.5 is probably too bad for multilanguage tasks
 """
 
 
@@ -26,7 +28,7 @@ headers = {"User-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
 # performs DuckDuckGo search, urls are extracted and status checked
 # 
 def ddg_search(query):
-    results = DDGS().text(query, max_results=8)
+    results = DDGS(headers=headers).text(query, max_results=5)
     urls = []
     for result in results:
         url = result['href']
@@ -37,8 +39,8 @@ def ddg_search(query):
     content = []
     for doc in docs:
         page_text = re.sub("\n\n+", "\n", doc.page_content)
-        text = truncate(page_text)
-        content.append(text)
+        text = text_to_chunks(page_text)
+        content.extend(text)
 
     return content
 
@@ -52,12 +54,15 @@ def get_page(urls):
 
     return docs_transformed
 
-# helper function to reduce the amount of text
-def truncate(text):
+def text_to_chunks(text, chunk_size=64):
     words = text.split()
-    truncated = " ".join(words[:100])
+    words = [w for w in words if 'wiki' not in w]
+    chunked = []
+    for chunk in range(0, len(words)-chunk_size, chunk_size):
+        truncated = " ".join(words[chunk:chunk+chunk_size])
+        chunked.append(truncated)
 
-    return truncated
+    return chunked
 
 
 # === Step 2: Retriever Model for Ranking ===
@@ -86,6 +91,7 @@ def rank_snippets(query, snippets, model_name="all-MiniLM-L6-v2", top_k=3):
 
     # Rank snippets by similarity
     ranked_indices = torch.argsort(similarities, descending=True)
+    print("len of ranked: ", len(ranked_indices))
     top_snippets = [snippets[idx] for idx in ranked_indices[:top_k]]
     
     return top_snippets
@@ -97,6 +103,7 @@ def generate_answer(query, context, model,
                              top_p = 0.1,
                              echo = False,
                              stop = ["User:"]):
+        context = f"Current date (Year/Month/Day) is:{datetime.now().year}/{datetime.now().month}/{datetime.now().day}" + context
         
         input_text = f"User: {query}\nContext: {context}\nAssistant:"
 
@@ -130,7 +137,7 @@ def main():
     # tokenizer = AutoTokenizer.from_pretrained(model_name)
     # model = AutoModelForCausalLM.from_pretrained(model_name)
     my_model_path = "./model/Phi-3.5-mini-instruct-Q4_K_L.gguf"
-    CONTEXT_SIZE = 2048
+    CONTEXT_SIZE = 1024
 
 
     chat_model = Llama(model_path=my_model_path,
@@ -142,13 +149,15 @@ def main():
     # Retrieve snippets from Google search
     print("Retrieving snippets...")
     search_results = ddg_search(query)
+    print(search_results)
+    print(len(search_results))
 
 
     # Rank snippets using the retriever model
     print("Ranking snippets...")
     top_snippets = rank_snippets(query, search_results)
+    print("len snippets: ", len(top_snippets))
     context = "\n".join(top_snippets)
-
     print(context)
 
     # Generate an answer using the model
