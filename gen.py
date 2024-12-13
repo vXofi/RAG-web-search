@@ -19,27 +19,30 @@ import asyncio
 TODO:
 handle accuweather (???)
 handle retrieved context length > model context length
-add ranking of smaller fragments over entire pages
-maybe fix input
+maybe change input
 length in tokens is different depending on used language
 phi 3.5 is probably too bad for multilanguage tasks
 preserve structure of retrieved pages
 add proper prompt
 problem with context for multiple questions
+test markdown formatting
 """
 
 
-headers = {"User-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
+headers = {"user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
 
 
 async def ddg_search(query, tokenizer):
-    results = DDGS(headers=headers).text(query, max_results=10)
+    results = DDGS(headers=headers).text(query, max_results=5)
     urls = [result['href'] for result in results]
 
     docs = await get_page(urls)
 
     content = []
-    print("docs:", docs)
+
+    print("query: ", query)
+    print("urls: ", urls)
+
     for doc in docs:
         page_text = process_page_content(doc)
         text = text_to_chunks(page_text, tokenizer)
@@ -51,12 +54,13 @@ async def ddg_search(query, tokenizer):
 async def get_page(urls):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        context = await browser.new_context(user_agent=headers["user_agent"])
+        page = await context.new_page()
 
         html_documents = []
         for url in urls:
             try:
-                await page.goto(url, wait_until="networkidle")
+                await page.goto(url, wait_until="domcontentloaded")
                 content = await page.content()
                 html_documents.append(content)
             except Exception as e:
@@ -71,19 +75,23 @@ def process_page_content(html):
 
     structured_text = []
     for tag in soup.find_all(["h1", "h2", "h3", "p"]):
-        if tag.name in ["h1", "h2", "h3"]:
-            structured_text.append(f"\n{tag.text.strip()}\n")
+        if tag.name == "h1":
+            structured_text.append(f"# {tag.text.strip()}\n")
+        elif tag.name == "h2":
+            structured_text.append(f"## {tag.text.strip()}\n")
+        elif tag.name == "h3":
+            structured_text.append(f"### {tag.text.strip()}\n")
         elif tag.name == "p":
             paragraph = re.sub(
                 r"(http[s]?://\S+|www\.\S+|\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b)",
                 "",
                 tag.text
-            )
+            ) # removes links
             paragraph = re.sub(r"\n+", " ", paragraph).strip()
             if paragraph:
                 structured_text.append(paragraph)
     
-    return "\n".join(structured_text)
+    return "\n\n".join(structured_text)
 
 
 def text_to_chunks(text, tokenizer, chunk_size=256, overlap_size=64):
@@ -104,21 +112,10 @@ def text_to_chunks(text, tokenizer, chunk_size=256, overlap_size=64):
 
 
 def rank_snippets(query, snippets, tokenizer, model_name="all-MiniLM-L6-v2", top_k=3):
-    """
-    Rank snippets by relevance to the query using embeddings.
-    
-    Args:
-        query (str): User's query.
-        snippets (list): List of text snippets.
-        model_name (str): Pre-trained model for embeddings.
-        top_k (int): Number of top relevant snippets to return.
-    
-    Returns:
-        list: Top-K relevant snippets.
-    """
     embedder = SentenceTransformer(model_name)
 
     text_chunks = [tokenizer.decode(chunk) for chunk in snippets]
+
     query_embedding = embedder.encode(query, convert_to_tensor=True)
     snippet_embeddings = embedder.encode(text_chunks, convert_to_tensor=True)
 
@@ -126,7 +123,6 @@ def rank_snippets(query, snippets, tokenizer, model_name="all-MiniLM-L6-v2", top
 
     top_indices = similarities.squeeze(0).argsort(descending=True)
     top_snippets = [text_chunks[idx] for idx in top_indices[:top_k]]
-    print(top_snippets)
     
     return top_snippets
 
@@ -184,9 +180,9 @@ async def main():
 
         print("Ranking snippets...")
         top_snippets = rank_snippets(query, search_results, tokenizer)
-        print("len snippets: ", len(top_snippets))
-        context = "\n".join(top_snippets)
-        print(context)
+
+        context = "".join(top_snippets)
+        print("context: ", context)
 
         print("Generating answer...")
         answer = generate_answer(query, context, chat_model)
