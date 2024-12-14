@@ -20,12 +20,9 @@ TODO:
 handle accuweather (???)
 handle retrieved context length > model context length
 maybe change input
-length in tokens is different depending on used language
-phi 3.5 is probably too bad for multilanguage tasks
-preserve structure of retrieved pages
 add proper prompt
-problem with context for multiple questions
-test markdown formatting
+potentially a problem with context for multiple questions
+add source
 """
 
 
