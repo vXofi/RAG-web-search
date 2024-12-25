@@ -37,9 +37,6 @@ async def ddg_search(query, tokenizer):
 
     content = []
 
-    print("query: ", query)
-    print("urls: ", urls)
-
     for doc in docs:
         page_text = process_page_content(doc)
         text = text_to_chunks(page_text, tokenizer)
@@ -129,13 +126,23 @@ def generate_answer(query, context, model,
                              temperature = 0.7,
                              top_p = 0.1,
                              echo = False,
-                             stop = ["User:"]):
-        context = f"Current date (Year/Month/Day) is:{datetime.now().year}/{datetime.now().month}/{datetime.now().day}" + context
-        
-        input_text = f"User: {query}\nContext: {context}\nAssistant:"
+                             stop = ["<|end|>"]):
+        prompt = f"""
+        <|system|>
+        You are a helpful assistant with access to latest information retrieved from internet.
+        Current date (Year/Month/Day) is: {datetime.now().year}/{datetime.now().month}/{datetime.now().day}.<|end|>
+        <|system|>
+        Retrieved context: {context}<|end|>
+        <|user|>
+        {query}<|end|>
+        <|assistant|>
+        """
 
+        print(prompt)
+
+        
         response_stream = model(
-            input_text,
+            prompt=prompt,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -167,6 +174,7 @@ async def main():
 
     chat_model = Llama(model_path=my_model_path,
                        n_ctx=CONTEXT_SIZE, n_threads=6)
+    
     tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3.5-mini-instruct") 
 
     query = input("Enter your question: ")
