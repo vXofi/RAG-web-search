@@ -17,12 +17,12 @@ import asyncio
 
 """
 TODO:
-handle accuweather (???)
-handle retrieved context length > model context length
 maybe change input
-add proper prompt
 potentially a problem with context for multiple questions
-add source
+handle case where all of the retrieved pages have bot protection
+try validating answer with same model
+when retrieving numerical data it is not explicitly similar to query
+handle case when query contains "" that leads to exact matching of web search
 """
 
 
@@ -30,7 +30,7 @@ headers = {"user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
 
 
 async def ddg_search(query, tokenizer):
-    results = DDGS(headers=headers).text(query, max_results=5)
+    results = DDGS(headers=headers).text(query, max_results=10)
     urls = [result['href'] for result in results]
 
     docs = await get_page(urls)
@@ -47,7 +47,7 @@ async def ddg_search(query, tokenizer):
 
 async def get_page(urls):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.firefox.launch(headless=True)
         context = await browser.new_context(user_agent=headers["user_agent"])
         page = await context.new_page()
 
@@ -59,7 +59,10 @@ async def get_page(urls):
                 html_documents.append(content)
             except Exception as e:
                 print(f"Failed to load {url}: {e}")
-        
+                if not browser.is_connected():
+                    print("Restarting browser due to error")
+                    browser = await p.chromium.launch(headless=True)
+
         await browser.close()
 
     return html_documents
@@ -129,7 +132,9 @@ def generate_answer(query, context, model,
                              stop = ["<|end|>"]):
         prompt = f"""
         <|system|>
-        You are a helpful assistant with access to latest information retrieved from internet.
+        You are a helpful assistant with access to the latest information retrieved from the internet.
+        Under no circumstances should you mention disclaimers, sources, or context in your responses.
+        Your role is to provide precise and accurate answers to the user query without additional commentary.
         Current date (Year/Month/Day) is: {datetime.now().year}/{datetime.now().month}/{datetime.now().day}.<|end|>
         <|system|>
         Retrieved context: {context}<|end|>
