@@ -25,6 +25,8 @@ langchain = "^0.3.8"
 duckduckgo-search = "^6.3.6"
 langchain-community = "^0.3.8"
 playwright = "^1.49.0"
+fastapi = "^0.115.6"
+uvicorn = "^0.34.0"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0.0"

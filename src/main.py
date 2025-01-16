@@ -1,3 +1,9 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, StreamingResponse
+from contextlib import asynccontextmanager
+from pydantic import BaseModel
+from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlencode
@@ -26,6 +32,41 @@ handle case when query contains "" that leads to exact matching of web search
 """
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global playwright_instance, browser, chat_model, tokenizer
+
+    print("Startup: Initializing Playwright")
+    playwright_instance = await async_playwright().start()
+    browser = await playwright_instance.firefox.launch(headless=True)
+
+    print("Loading model...")
+    my_model_path = "./model/Phi-3.5-mini-instruct-Q4_K_L.gguf"
+    CONTEXT_SIZE = 1024
+    chat_model = Llama(model_path=my_model_path,
+                       n_ctx=CONTEXT_SIZE, n_threads=6)
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3.5-mini-instruct")
+    print("Models loaded successfully!")
+
+    yield
+    print("Shutdown: Cleaning up Playwright")
+    await browser.close()
+    await playwright_instance.stop()
+
+
+app = FastAPI(lifespan=lifespan)
+
+@app.get("/")
+async def read_root():
+    return FileResponse("static/index.html")
+
+@app.get("/favicon.ico")
+async def favicon():
+    return FileResponse("static/favicon.ico")
+
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 headers = {"user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
 
 
@@ -46,24 +87,20 @@ async def ddg_search(query, tokenizer):
 
 
 async def get_page(urls):
-    async with async_playwright() as p:
-        browser = await p.firefox.launch(headless=True)
-        context = await browser.new_context(user_agent=headers["user_agent"])
-        page = await context.new_page()
+    global browser
+    context = await browser.new_context(user_agent=headers["user_agent"])
+    page = await context.new_page()
 
-        html_documents = []
-        for url in urls:
-            try:
-                await page.goto(url, wait_until="domcontentloaded")
-                content = await page.content()
-                html_documents.append(content)
-            except Exception as e:
-                print(f"Failed to load {url}: {e}")
-                if not browser.is_connected():
-                    print("Restarting browser due to error")
-                    browser = await p.chromium.launch(headless=True)
+    html_documents = []
+    for url in urls:
+        try:
+            await page.goto(url, wait_until="domcontentloaded")
+            content = await page.content()
+            html_documents.append(content)
+        except Exception as e:
+            print(f"Failed to load {url}: {e}")
 
-        await browser.close()
+    await context.close()
 
     return html_documents
 
@@ -124,7 +161,7 @@ def rank_snippets(query, snippets, tokenizer, model_name="all-MiniLM-L6-v2", top
     return top_snippets
 
 
-def generate_answer(query, context, model,
+def generate_answer_stream(query, context, model,
                              max_tokens=1024,
                              temperature = 0.7,
                              top_p = 0.1,
@@ -140,7 +177,7 @@ def generate_answer(query, context, model,
         Retrieved context: {context}<|end|>
         <|user|>
         {query}<|end|>
-        <|assistant|>
+        <|assistant|>   
         """
 
         print(prompt)
@@ -163,10 +200,14 @@ def generate_answer(query, context, model,
             token = chunk["choices"][0]["text"]
 
             print(token, end="", flush=True)
-            output += token
 
-        print()
-        return output
+            yield token
+            # output += token
+
+        # print()
+        # return output
+
+"""
 
 async def main():
     print("Loading model...")
@@ -203,3 +244,36 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+"""
+
+class QueryRequest(BaseModel):
+    query: str
+
+
+class AnswerResponse(BaseModel):
+    answer: str
+
+
+@app.get("/rag")
+async def rag_endpoint(query: str):
+    print(f"Received query: {query}")
+
+    try:
+        print("Retrieving snippets...")
+        search_results = await ddg_search(query, tokenizer)
+
+        print("Ranking snippets...")
+        top_snippets = rank_snippets(query, search_results, tokenizer)
+
+        context = "".join(top_snippets)
+
+        print("Generating answer stream...")
+        # answer = generate_answer(query, context, chat_model)
+
+        return StreamingResponse(generate_answer_stream(query, context, chat_model), media_type="text/event-stream")
+        # return {"answer": answer}
+        
+    except Exception as e:
+        print(f"Error during RAG processing: {e}")
+        raise HTTPException(status_code=500, detail="Error processing the query")
