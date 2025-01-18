@@ -167,16 +167,20 @@ def generate_answer_stream(query, context, model,
                              top_p = 0.1,
                              echo = False,
                              stop = ["<|end|>"]):
+        query = query.replace('"', '')
         prompt = f"""
         <|system|>
         You are a helpful assistant with access to the latest information retrieved from the internet.
         Under no circumstances should you mention disclaimers, sources, or context in your responses.
         Your role is to provide precise and accurate answers to the user query without additional commentary.
         Current date (Year/Month/Day) is: {datetime.now().year}/{datetime.now().month}/{datetime.now().day}.<|end|>
+
         <|system|>
         Retrieved context: {context}<|end|>
+
         <|user|>
         {query}<|end|>
+
         <|assistant|>   
         """
 
@@ -195,18 +199,14 @@ def generate_answer_stream(query, context, model,
         output=""
 
         print("Assistant: ", end="")
+
         for chunk in response_stream:
 
             token = chunk["choices"][0]["text"]
 
             print(token, end="", flush=True)
 
-            yield token
-            # output += token
-
-        # print()
-        # return output
-
+            yield f"data: {token}\n\n"
 """
 
 async def main():
@@ -269,10 +269,8 @@ async def rag_endpoint(query: str):
         context = "".join(top_snippets)
 
         print("Generating answer stream...")
-        # answer = generate_answer(query, context, chat_model)
 
         return StreamingResponse(generate_answer_stream(query, context, chat_model), media_type="text/event-stream")
-        # return {"answer": answer}
         
     except Exception as e:
         print(f"Error during RAG processing: {e}")

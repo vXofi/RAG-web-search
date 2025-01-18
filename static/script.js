@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sendButton = document.getElementById('send-button');
     const loadingIndicator = document.getElementById('loading-indicator');
     let eventSource = null;
+    let currentAssistantMessage = "";
 
     sendButton.addEventListener('click', sendMessage);
     queryInput.addEventListener('keypress', (event) => {
@@ -22,7 +23,10 @@ document.addEventListener('DOMContentLoaded', () => {
         loadingIndicator.style.display = 'block';
         chatLog.scrollTop = chatLog.scrollHeight;
 
-        let assistantMessageDiv = null;
+        let assistantMessageDiv = document.createElement('div');
+        assistantMessageDiv.classList.add('message', 'assistant-message');
+        chatLog.appendChild(assistantMessageDiv);
+        currentAssistantMessage = "";
 
         if (eventSource) {
             eventSource.close();
@@ -37,9 +41,6 @@ document.addEventListener('DOMContentLoaded', () => {
         eventSource.onerror = (error) => {
             console.warn("SSE connection closed by server (normal).", error);
             loadingIndicator.style.display = 'none';
-            // Optionally, remove the system message about the error
-            // or replace it with a more informative message if needed.
-            // addSystemMessage("Response complete.");
             if (eventSource) {
                 eventSource.close();
             }
@@ -47,12 +48,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         eventSource.onmessage = (event) => {
             const token = event.data;
-            if (!assistantMessageDiv) {
-                assistantMessageDiv = document.createElement('div');
-                assistantMessageDiv.classList.add('message', 'assistant-message');
-                chatLog.appendChild(assistantMessageDiv);
-            }
-            assistantMessageDiv.textContent += token;
+            currentAssistantMessage += token;
+            assistantMessageDiv.innerHTML = marked.parse(currentAssistantMessage.replace(/\n\n/g, '\n').trim());
             chatLog.scrollTop = chatLog.scrollHeight;
         };
 
@@ -73,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function addSystemMessage(message) {
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', 'system-message');
-        messageDiv.textContent = message;
+        messageDiv.innerHTML = marked.parse(message);
         chatLog.appendChild(messageDiv);
         chatLog.scrollTop = chatLog.scrollHeight;
     }
