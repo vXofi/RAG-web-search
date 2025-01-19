@@ -19,16 +19,14 @@ import os
 from llama_cpp import Llama
 from datetime import datetime
 import asyncio
+import json
 
 
 """
 TODO:
-maybe change input
-potentially a problem with context for multiple questions
 handle case where all of the retrieved pages have bot protection
 try validating answer with same model
 when retrieving numerical data it is not explicitly similar to query
-handle case when query contains "" that leads to exact matching of web search
 """
 
 
@@ -42,7 +40,7 @@ async def lifespan(app: FastAPI):
 
     print("Loading model...")
     my_model_path = "./model/Phi-3.5-mini-instruct-Q4_K_L.gguf"
-    CONTEXT_SIZE = 1024
+    CONTEXT_SIZE = 2048
     chat_model = Llama(model_path=my_model_path,
                        n_ctx=CONTEXT_SIZE, n_threads=6)
     tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3.5-mini-instruct")
@@ -52,7 +50,6 @@ async def lifespan(app: FastAPI):
     print("Shutdown: Cleaning up Playwright")
     await browser.close()
     await playwright_instance.stop()
-
 
 app = FastAPI(lifespan=lifespan)
 
@@ -71,6 +68,8 @@ headers = {"user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
 
 
 async def ddg_search(query, tokenizer):
+    """Performs a DuckDuckGo search and returns relevant content."""
+    query = query.replace('"', '')
     results = DDGS(headers=headers).text(query, max_results=10)
     urls = [result['href'] for result in results]
 
@@ -128,7 +127,7 @@ def process_page_content(html):
     return "\n\n".join(structured_text)
 
 
-def text_to_chunks(text, tokenizer, chunk_size=256, overlap_size=64):
+def text_to_chunks(text, tokenizer, chunk_size=512, overlap_size=128):
     tokens = tokenizer.encode(text)
 
     chunks = []
@@ -145,7 +144,7 @@ def text_to_chunks(text, tokenizer, chunk_size=256, overlap_size=64):
     return chunks
 
 
-def rank_snippets(query, snippets, tokenizer, model_name="all-MiniLM-L6-v2", top_k=3):
+def rank_snippets(query, snippets, tokenizer, model_name="all-MiniLM-L6-v2", top_k=2):
     embedder = SentenceTransformer(model_name)
 
     text_chunks = [tokenizer.decode(chunk) for chunk in snippets]
@@ -155,7 +154,7 @@ def rank_snippets(query, snippets, tokenizer, model_name="all-MiniLM-L6-v2", top
 
     similarities = util.cos_sim(query_embedding, snippet_embeddings).squeeze(0)
 
-    top_indices = similarities.squeeze(0).argsort(descending=True)
+    top_indices = similarities.argsort(descending=True)
     top_snippets = [text_chunks[idx] for idx in top_indices[:top_k]]
     
     return top_snippets
@@ -165,87 +164,33 @@ def generate_answer_stream(query, context, model,
                              max_tokens=1024,
                              temperature = 0.7,
                              top_p = 0.1,
-                             echo = False,
                              stop = ["<|end|>"]):
-        query = query.replace('"', '')
-        prompt = f"""
-        <|system|>
-        You are a helpful assistant with access to the latest information retrieved from the internet.
-        Under no circumstances should you mention disclaimers, sources, or context in your responses.
-        Your role is to provide precise and accurate answers to the user query without additional commentary.
-        Current date (Year/Month/Day) is: {datetime.now().year}/{datetime.now().month}/{datetime.now().day}.<|end|>
+        prompt = f"""<|system|>You are a helpful assistant. Current date is {datetime.now().strftime('%Y-%m-%d')}.
+        You have access to a web search function. If the user's query required up-to-date information or
+        specific details not readily available, web search results are in Context. Otherwise, answer directly.
+        <|user|>Context: {context}<|end|>
+        <|user|>Query: {query}<|end|>
+        <|assistant|>"""
 
-        <|system|>
-        Retrieved context: {context}<|end|>
-
-        <|user|>
-        {query}<|end|>
-
-        <|assistant|>   
-        """
-
-        print(prompt)
-
+        print("\n--- Prompt ---\n", prompt)
         
-        response_stream = model(
-            prompt=prompt,
+        response_stream = model.create_chat_completion(
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
-            echo=echo,
             stop=stop,
             stream=True)
-        
-        output=""
 
-        print("Assistant: ", end="")
+        print("\n--- Assistant Response ---\n", end="")
 
         for chunk in response_stream:
 
-            token = chunk["choices"][0]["text"]
+            token = chunk["choices"][0]["delta"].get("content", "")
 
             print(token, end="", flush=True)
 
             yield f"data: {token}\n\n"
-"""
-
-async def main():
-    print("Loading model...")
-    # model_name = "SicariusSicariiStuff/Phi-3.5-mini-instruct_Uncensored_FP8"
-    # tokenizer = AutoTokenizer.from_pretrained(model_name)
-    # model = AutoModelForCausalLM.from_pretrained(model_name)
-    my_model_path = "./model/Phi-3.5-mini-instruct-Q4_K_L.gguf"
-    CONTEXT_SIZE = 1024
-
-
-    chat_model = Llama(model_path=my_model_path,
-                       n_ctx=CONTEXT_SIZE, n_threads=6)
-    
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3.5-mini-instruct") 
-
-    query = input("Enter your question: ")
-    while query != 'break':
-
-        print("Retrieving snippets...")
-        search_results = await ddg_search(query, tokenizer)
-
-        print("Ranking snippets...")
-        top_snippets = rank_snippets(query, search_results, tokenizer)
-
-        context = "".join(top_snippets)
-        print("context: ", context)
-
-        print("Generating answer...")
-        answer = generate_answer(query, context, chat_model)
-        query = input("Enter your question: ")
-    
-    print("\n=== Answer ===")
-    print(answer)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-"""
 
 class QueryRequest(BaseModel):
     query: str
@@ -257,20 +202,103 @@ class AnswerResponse(BaseModel):
 
 @app.get("/rag")
 async def rag_endpoint(query: str):
-    print(f"Received query: {query}")
+    # query = request.query
 
     try:
-        print("Retrieving snippets...")
-        search_results = await ddg_search(query, tokenizer)
+        decision_prompt = f"""<|system|>You are a helpful assistant with access to a web search function.
+        For the given user query, determine if it requires using the 'web_search' function to retrieve up-to-date information or specific details not readily available.
+        You have access to the following tools:
+        <function_calls>
+        {{
+            "web_search": {{
+                "name": "web_search",
+                "description": "Searches the web for relevant information.",
+                "parameters": {{
+                "query": {{
+                    "type": "string",
+                    "description": "The search query to use."
+                    }}
+                }}
+            }}
+        }}
+        </function_calls>
+        If the query necessitates using the 'web_search' function, respond with a function call in the following format:
+        {{
+        "tool_calls": [
+            {{
+            "id": "unique_id_for_this_call",
+            "type": "function",
+            "function": {{
+                "name": "web_search",
+                "arguments": "{{\\"query\\": \\"the search query\\"}}"
+                }}
+            }}
+        ]
+        }}
+        <|user|>Query: {query}<|end|>
+        <|assistant|>"""
 
-        print("Ranking snippets...")
-        top_snippets = rank_snippets(query, search_results, tokenizer)
+        print("evaluating query")
 
-        context = "".join(top_snippets)
+        decision_response = chat_model.create_chat_completion(
+            messages=[{"role": "user", "content": decision_prompt}],
+            tools = [{
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "Searches the web for relevant information.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The search query to use."
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                }
+                }],
+                tool_choice="auto"
+        )
 
-        print("Generating answer stream...")
+        response_data = decision_response["choices"][0]["message"]
 
-        return StreamingResponse(generate_answer_stream(query, context, chat_model), media_type="text/event-stream")
+        print(response_data)
+
+        content_text = response_data["content"]
+        json_content = content_text[:content_text.find('}\n\n')+1]
+
+        try:
+            content_data = json.loads(json_content)
+            
+            if "tool_calls" in content_data:
+                tool_call = content_data["tool_calls"][0]
+                if tool_call["function"]["name"] == "web_search":
+                    search_query = json.loads(tool_call["function"]["arguments"]).get("query")
+                    print(f"Model decided to use web search with query: {search_query}")
+                    search_results = await ddg_search(search_query, tokenizer)
+                    if search_results:
+                        print("Ranking snippets...")
+                        top_snippets = rank_snippets(query, search_results, tokenizer)
+                        context = "\n\n".join(top_snippets)
+                        print("Generating answer stream with web search context")
+
+                        return StreamingResponse(generate_answer_stream(query, context, chat_model), media_type="text/event-stream")
+                    else:
+                        return StreamingResponse(generate_answer_stream(query, "No relevant web content found.", chat_model), media_type="text/event-stream")
+            else:
+                print("Model decided to answer without web search.")
+
+                direct_answer_prompt = f"""<|system|>You are a helpful assistant.<|end|>
+                <|user|>Query: {query}<|end|>
+                <|assistant|>"""
+
+                return StreamingResponse(generate_answer_stream(query, direct_answer_prompt, chat_model), media_type="text/event-stream")
+
+        except json.JSONDecodeError:
+            print("Failed to parse model response as JSON")
+            return StreamingResponse(generate_answer_stream(query, "Error processing request.", chat_model), media_type="text/event-stream")
         
     except Exception as e:
         print(f"Error during RAG processing: {e}")
