@@ -27,6 +27,7 @@ TODO:
 handle case where all of the retrieved pages have bot protection
 try validating answer with same model
 when retrieving numerical data it is not explicitly similar to query
+no prints in console after first message
 """
 
 
@@ -167,7 +168,7 @@ def generate_answer_stream(query, context, model,
                              stop = ["<|end|>"]):
         prompt = f"""<|system|>You are a helpful assistant. Current date is {datetime.now().strftime('%Y-%m-%d')}.
         You have access to a web search function. If the user's query required up-to-date information or
-        specific details not readily available, web search results are in Context. Otherwise, answer directly.
+        specific details not readily available, web search results are in Context. Otherwise, answer directly.<|end|>
         <|user|>Context: {context}<|end|>
         <|user|>Query: {query}<|end|>
         <|assistant|>"""
@@ -206,7 +207,16 @@ async def rag_endpoint(query: str):
 
     try:
         decision_prompt = f"""<|system|>You are a helpful assistant with access to a web search function.
-        For the given user query, determine if it requires using the 'web_search' function to retrieve up-to-date information or specific details not readily available.
+        For the given user query, carefully evaluate if it requires using the 'web_search' function.
+
+        Only use the web search function when the query:
+        1. Requires up-to-date information
+        2. Needs specific details that aren't common knowledge
+        3. Involves current events, statistics, or complex technical information
+        4. Requires verification of facts that you're not completely certain about
+
+        For basic questions about common knowledge, general facts, or simple concepts, respond directly without using the web search.
+
         You have access to the following tools:
         <function_calls>
         {{
@@ -214,27 +224,44 @@ async def rag_endpoint(query: str):
                 "name": "web_search",
                 "description": "Searches the web for relevant information.",
                 "parameters": {{
-                "query": {{
-                    "type": "string",
-                    "description": "The search query to use."
+                    "query": {{
+                        "type": "string",
+                        "description": "The search query to use."
                     }}
                 }}
             }}
         }}
         </function_calls>
-        If the query necessitates using the 'web_search' function, respond with a function call in the following format:
+
+        Response format:
+        - For questions that can be answered directly: Provide a plain text response without any JSON formatting or code blocks
+        - For questions requiring web search: Provide the function call in the exact format shown below:
         {{
-        "tool_calls": [
-            {{
-            "id": "unique_id_for_this_call",
-            "type": "function",
-            "function": {{
-                "name": "web_search",
-                "arguments": "{{\\"query\\": \\"the search query\\"}}"
+            "tool_calls": [{{
+                "id": "unique_id",
+                "type": "function",
+                "function": {{
+                    "name": "web_search",
+                    "arguments": "{{\\"query\\": \\"search query\\"}}"
                 }}
-            }}
-        ]
+            }}]
         }}
+
+        Example responses:
+        Query: "What is the capital of France?"
+        Paris is the capital of France.
+
+        Query: "What are the latest COVID-19 statistics in Moscow?"
+        {{
+            "tool_calls": [{{
+                "id": "covid_stats_query",
+                "type": "function",
+                "function": {{
+                    "name": "web_search",
+                    "arguments": "{{\"query\\": \\"current COVID-19 statistics Moscow\\"}}"
+                }}
+            }}]
+        }}<|end|>
         <|user|>Query: {query}<|end|>
         <|assistant|>"""
 
@@ -267,15 +294,14 @@ async def rag_endpoint(query: str):
         print(response_data)
 
         content_text = response_data["content"]
-        json_content = content_text[:content_text.find('}\n\n')+1]
 
         try:
-            content_data = json.loads(json_content)
+            content_data = json.loads(content_text)
             
             if "tool_calls" in content_data:
                 tool_call = content_data["tool_calls"][0]
                 if tool_call["function"]["name"] == "web_search":
-                    search_query = json.loads(tool_call["function"]["arguments"]).get("query")
+                    search_query = json.loads(tool_call["function"]["arguments"])["query"]
                     print(f"Model decided to use web search with query: {search_query}")
                     search_results = await ddg_search(search_query, tokenizer)
                     if search_results:
@@ -288,17 +314,11 @@ async def rag_endpoint(query: str):
                     else:
                         return StreamingResponse(generate_answer_stream(query, "No relevant web content found.", chat_model), media_type="text/event-stream")
             else:
-                print("Model decided to answer without web search.")
-
-                direct_answer_prompt = f"""<|system|>You are a helpful assistant.<|end|>
-                <|user|>Query: {query}<|end|>
-                <|assistant|>"""
-
-                return StreamingResponse(generate_answer_stream(query, direct_answer_prompt, chat_model), media_type="text/event-stream")
+                raise json.JSONDecodeError
 
         except json.JSONDecodeError:
-            print("Failed to parse model response as JSON")
-            return StreamingResponse(generate_answer_stream(query, "Error processing request.", chat_model), media_type="text/event-stream")
+            print("Model decided to answer without web search.")
+            return StreamingResponse(generate_answer_stream(query, "", chat_model), media_type="text/event-stream")
         
     except Exception as e:
         print(f"Error during RAG processing: {e}")
