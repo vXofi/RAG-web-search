@@ -1,3 +1,17 @@
+marked.setOptions({
+    breaks: true,
+    mangle: false,
+    headerIds: false,
+    gfm: true
+  });
+
+const typingAnimation = () => {
+    const cursor = document.createElement('span');
+    cursor.classList.add('typing-cursor');
+    cursor.innerHTML = '▋';
+    return cursor;
+};
+
 document.addEventListener('DOMContentLoaded', () => {
     const chatLog = document.getElementById('chat-log');
     const queryInput = document.getElementById('query-input');
@@ -49,7 +63,17 @@ document.addEventListener('DOMContentLoaded', () => {
         eventSource.onmessage = (event) => {
             const token = event.data;
             currentAssistantMessage += token;
-            assistantMessageDiv.innerHTML = marked.parse(currentAssistantMessage.replace(/\n\n/g, '\n').trim());
+            
+            const cursors = assistantMessageDiv.getElementsByClassName('typing-cursor');
+            while(cursors.length > 0) cursors[0].remove();
+            
+            const sanitized = currentAssistantMessage
+                .replace(/(\d+)\. /g, "\n$1. ")  // force newlines before list items
+                .replace(/\*\*/g, "** ");         // prevent bold merging
+            
+            assistantMessageDiv.innerHTML = marked.parse(sanitized);
+            
+            assistantMessageDiv.appendChild(typingAnimation());
             chatLog.scrollTop = chatLog.scrollHeight;
         };
 

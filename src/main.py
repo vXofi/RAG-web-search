@@ -3,29 +3,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
-from typing import Optional
-import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlencode
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer, util
-from langchain_community.document_loaders import AsyncChromiumLoader
-from langchain_community.document_transformers import BeautifulSoupTransformer
 from duckduckgo_search import DDGS
 from playwright.async_api import async_playwright
-import torch
 import re
-import os
 from llama_cpp import Llama
 from datetime import datetime
-import asyncio
 import json
 
 
 """
 TODO:
-handle case where all of the retrieved pages have bot protection
-try validating answer with same model
 when retrieving numerical data it is not explicitly similar to query
 no prints in console after first message
 """
@@ -160,6 +150,14 @@ def rank_snippets(query, snippets, tokenizer, model_name="all-MiniLM-L6-v2", top
     
     return top_snippets
 
+def extract_json(response_text):
+    cleaned = re.sub(r'(?i)note:.*', '', response_text)
+    
+    try:
+        json_str = re.search(r'\{.*\}', cleaned, re.DOTALL).group()
+        return json.loads(json_str)
+    except (AttributeError, json.JSONDecodeError):
+        raise ValueError("No valid JSON found in response")
 
 def generate_answer_stream(query, context, model,
                              max_tokens=1024,
@@ -203,9 +201,9 @@ class AnswerResponse(BaseModel):
 
 @app.get("/rag")
 async def rag_endpoint(query: str):
-    # query = request.query
 
     try:
+        '''
         decision_prompt = f"""<|system|>You are a helpful assistant with access to a web search function.
         For the given user query, carefully evaluate if it requires using the 'web_search' function.
 
@@ -264,6 +262,34 @@ async def rag_endpoint(query: str):
         }}<|end|>
         <|user|>Query: {query}<|end|>
         <|assistant|>"""
+        '''
+        decision_prompt = f"""<|system|>You are a JSON response generator. Strictly follow these rules:
+        1. For the given user query, carefully evaluate if it requires using the 'web_search' function.
+        2. For direct answers: Use ONLY plain text with NO formatting
+        3. For web searches: Use EXACTLY this JSON format:
+        {{
+            "tool_calls": [{{
+                "id": "unique_id",
+                "type": "function",
+                "function": {{
+                    "name": "web_search",
+                    "arguments": {{
+                        "arguments": "{{\\"query\\": \\"search query\\"}}"
+                    }}
+                }}
+            }}]
+        }}
+        4. NEVER add explanations, notes, or non-JSON text
+        5. Your response MUST be either plain text or valid JSON ONLY
+
+        Examples:
+        User: Current weather in Moscow
+        Assistant: {{"tool_calls": [{{"id": "weather_123", "type": "function", "function": {{"name": "web_search", "arguments": {{\\"query\\": \\"current weather Moscow\\"}}}}}}]}}
+
+        User: Capital of France
+        Assistant: Paris is the capital of France.<|end|>
+        <|user|>Query: {query}<|end|>
+        <|assistant|>"""
 
         print("evaluating query")
 
@@ -286,17 +312,20 @@ async def rag_endpoint(query: str):
                     }
                 }
                 }],
-                tool_choice="auto"
+                tool_choice="auto",
+                temperature=0.6,
+                stop=["<|end|>", "\n\n"]
         )
 
         response_data = decision_response["choices"][0]["message"]
 
         print(response_data)
 
-        content_text = response_data["content"]
-
         try:
-            content_data = json.loads(content_text)
+            content_text = response_data["content"]
+            content_text = content_text.replace('\\"', '"')
+
+            content_data = extract_json(content_text)
             
             if "tool_calls" in content_data:
                 tool_call = content_data["tool_calls"][0]
@@ -314,9 +343,9 @@ async def rag_endpoint(query: str):
                     else:
                         return StreamingResponse(generate_answer_stream(query, "No relevant web content found.", chat_model), media_type="text/event-stream")
             else:
-                raise json.JSONDecodeError
+                raise ValueError
 
-        except json.JSONDecodeError:
+        except (ValueError, json.JSONDecodeError):
             print("Model decided to answer without web search.")
             return StreamingResponse(generate_answer_stream(query, "", chat_model), media_type="text/event-stream")
         
