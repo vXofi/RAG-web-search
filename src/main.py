@@ -18,6 +18,7 @@ import json
 TODO:
 when retrieving numerical data it is not explicitly similar to query
 no prints in console after first message
+somehow model answers with markdown when markdown is mentioned in query
 """
 
 
@@ -151,10 +152,8 @@ def rank_snippets(query, snippets, tokenizer, model_name="all-MiniLM-L6-v2", top
     return top_snippets
 
 def extract_json(response_text):
-    cleaned = re.sub(r'(?i)note:.*', '', response_text)
-    
     try:
-        json_str = re.search(r'\{.*\}', cleaned, re.DOTALL).group()
+        json_str = re.search(r'\{.*\}', response_text, re.DOTALL).group()
         return json.loads(json_str)
     except (AttributeError, json.JSONDecodeError):
         raise ValueError("No valid JSON found in response")
@@ -164,17 +163,25 @@ def generate_answer_stream(query, context, model,
                              temperature = 0.7,
                              top_p = 0.1,
                              stop = ["<|end|>"]):
-        prompt = f"""<|system|>You are a helpful assistant. Current date is {datetime.now().strftime('%Y-%m-%d')}.
-        You have access to a web search function. If the user's query required up-to-date information or
-        specific details not readily available, web search results are in Context. Otherwise, answer directly.<|end|>
-        <|user|>Context: {context}<|end|>
-        <|user|>Query: {query}<|end|>
-        <|assistant|>"""
+        prompt_messages = [{
+        "role": "system",
+        "content": f"""You are a helpful assistant. Current date: {datetime.now().strftime('%Y-%m-%d')}.
+        1. Use web search results ONLY when:
+        - Query requires current information
+        - Needs specific data/statistics
+        - About recent events/developments
+        2. For common knowledge answer directly
 
-        print("\n--- Prompt ---\n", prompt)
+        Web results (if available):
+        {context}"""
+            },
+            {
+                "role": "user",
+                "content": f"Query: {query}"
+            }]
         
         response_stream = model.create_chat_completion(
-            messages=[{"role": "user", "content": prompt}],
+            messages=prompt_messages,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -263,38 +270,37 @@ async def rag_endpoint(query: str):
         <|user|>Query: {query}<|end|>
         <|assistant|>"""
         '''
-        decision_prompt = f"""<|system|>You are a JSON response generator. Strictly follow these rules:
-        1. For the given user query, carefully evaluate if it requires using the 'web_search' function.
-        2. For direct answers: Use ONLY plain text with NO formatting
-        3. For web searches: Use EXACTLY this JSON format:
-        {{
-            "tool_calls": [{{
-                "id": "unique_id",
-                "type": "function",
-                "function": {{
-                    "name": "web_search",
-                    "arguments": {{
-                        "arguments": "{{\\"query\\": \\"search query\\"}}"
-                    }}
-                }}
-            }}]
-        }}
-        4. NEVER add explanations, notes, or non-JSON text
-        5. Your response MUST be either plain text or valid JSON ONLY
+        decision_prompt_messages = [{
+        "role": "system",
+        "content": """You are a query evaluator. Strictly follow these rules:
+        1. Use web_search ONLY for queries requiring up-to-date info, specific details, or non-common knowledge
+        2. Answer directly for common knowledge (e.g., capitals, basic facts)
+        3. Responses must be either plain text or valid JSON (NO explanations or code formatting)
 
         Examples:
         User: Current weather in Moscow
-        Assistant: {{"tool_calls": [{{"id": "weather_123", "type": "function", "function": {{"name": "web_search", "arguments": {{\\"query\\": \\"current weather Moscow\\"}}}}}}]}}
+        Assistant:
+        {
+            "tool_calls": [{
+                "id": "weather_123",
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "arguments": {
+                        "query": "current weather Moscow"
+                    }
+                }
+            }]
+        }
 
         User: Capital of France
-        Assistant: Paris is the capital of France.<|end|>
-        <|user|>Query: {query}<|end|>
-        <|assistant|>"""
+        Assistant: Paris is the capital of France."""
+        }, {"role": "user", "content": f"Query: {query}"}]
 
         print("evaluating query")
 
         decision_response = chat_model.create_chat_completion(
-            messages=[{"role": "user", "content": decision_prompt}],
+            messages=decision_prompt_messages,
             tools = [{
                 "type": "function",
                 "function": {
@@ -313,7 +319,7 @@ async def rag_endpoint(query: str):
                 }
                 }],
                 tool_choice="auto",
-                temperature=0.6,
+                temperature=0.3,
                 stop=["<|end|>", "\n\n"]
         )
 
@@ -323,14 +329,13 @@ async def rag_endpoint(query: str):
 
         try:
             content_text = response_data["content"]
-            content_text = content_text.replace('\\"', '"')
 
             content_data = extract_json(content_text)
             
             if "tool_calls" in content_data:
                 tool_call = content_data["tool_calls"][0]
                 if tool_call["function"]["name"] == "web_search":
-                    search_query = json.loads(tool_call["function"]["arguments"])["query"]
+                    search_query = tool_call["function"]["arguments"]["query"]
                     print(f"Model decided to use web search with query: {search_query}")
                     search_results = await ddg_search(search_query, tokenizer)
                     if search_results:

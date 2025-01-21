@@ -114,18 +114,21 @@ body {
 }
 
 .message pre {
-    background: rgba(255, 255, 255, 0.1);
+    position: relative;
+    background: rgba(0, 0, 0, 0.3) !important;
     padding: 1rem;
-    border-radius: 0.5rem;
+    border-radius: 8px;
     overflow-x: auto;
 }
 
 .message code {
-    color: var(--text-primary);
-    font-family: monospace;
-    background: rgba(255, 255, 255, 0.1);
-    padding: 0.2em 0.4em;
-    border-radius: 3px;
+    font-family: 'Fira Code', monospace;
+    font-size: 0.9em;
+}
+
+.message pre code {
+    background: transparent !important;
+    padding: 0 !important;
 }
 
 .message th, .message td {
@@ -135,6 +138,40 @@ body {
 
 .message th {
     background: rgba(255, 255, 255, 0.1);
+}
+
+.message-content {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.message-content pre {
+    position: relative;
+    background: rgba(0, 0, 0, 0.3) !important;
+    padding: 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+}
+
+.message-content code {
+    font-family: 'Fira Code', monospace;
+    font-size: 0.9em;
+    white-space: pre-wrap;
+}
+
+.message-content h1, .message-content h2, .message-content h3 {
+    margin: 0.8em 0;
+    padding-bottom: 0.2em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.message-content ul, .message-content ol {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+}
+
+.message-content li {
+    margin: 0.3em 0;
 }
 
 .assistant-message > *:not(pre) {
@@ -245,7 +282,14 @@ body {
 
 .typing-cursor {
     animation: blink 1s infinite;
-    opacity: 1;
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 2px;
+    width: 8px;
+    height: 1.2em;
+    background: rgba(255, 255, 255, 0.7);
+    position: relative;
+    top: -1px;
 }
 
 @keyframes messageAppear {
