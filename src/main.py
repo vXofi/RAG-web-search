@@ -213,66 +213,6 @@ class AnswerResponse(BaseModel):
 async def rag_endpoint(query: str):
 
     try:
-        '''
-        decision_prompt = f"""<|system|>You are a helpful assistant with access to a web search function.
-        For the given user query, carefully evaluate if it requires using the 'web_search' function.
-
-        Only use the web search function when the query:
-        1. Requires up-to-date information
-        2. Needs specific details that aren't common knowledge
-        3. Involves current events, statistics, or complex technical information
-        4. Requires verification of facts that you're not completely certain about
-
-        For basic questions about common knowledge, general facts, or simple concepts, respond directly without using the web search.
-
-        You have access to the following tools:
-        <function_calls>
-        {{
-            "web_search": {{
-                "name": "web_search",
-                "description": "Searches the web for relevant information.",
-                "parameters": {{
-                    "query": {{
-                        "type": "string",
-                        "description": "The search query to use."
-                    }}
-                }}
-            }}
-        }}
-        </function_calls>
-
-        Response format:
-        - For questions that can be answered directly: Provide a plain text response without any JSON formatting or code blocks
-        - For questions requiring web search: Provide the function call in the exact format shown below:
-        {{
-            "tool_calls": [{{
-                "id": "unique_id",
-                "type": "function",
-                "function": {{
-                    "name": "web_search",
-                    "arguments": "{{\\"query\\": \\"search query\\"}}"
-                }}
-            }}]
-        }}
-
-        Example responses:
-        Query: "What is the capital of France?"
-        Paris is the capital of France.
-
-        Query: "What are the latest COVID-19 statistics in Moscow?"
-        {{
-            "tool_calls": [{{
-                "id": "covid_stats_query",
-                "type": "function",
-                "function": {{
-                    "name": "web_search",
-                    "arguments": "{{\"query\\": \\"current COVID-19 statistics Moscow\\"}}"
-                }}
-            }}]
-        }}<|end|>
-        <|user|>Query: {query}<|end|>
-        <|assistant|>"""
-        '''
         decision_prompt_messages = [{
         "role": "system",
         "content": """You are a query evaluator. Strictly follow these rules:
