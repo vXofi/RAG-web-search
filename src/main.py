@@ -166,11 +166,12 @@ def generate_answer_stream(query, context, model,
         prompt_messages = [{
         "role": "system",
         "content": f"""You are a helpful assistant. Current date: {datetime.now().strftime('%Y-%m-%d')}.
-        1. Use web search results ONLY when:
+        1. Be concise
+        2. Use web search results ONLY when:
         - Query requires current information
         - Needs specific data/statistics
         - About recent events/developments
-        2. For common knowledge answer directly
+        3. For common knowledge answer directly
 
         Web results (if available):
         {context}"""
@@ -197,6 +198,8 @@ def generate_answer_stream(query, context, model,
             print(token, end="", flush=True)
 
             yield f"data: {token}\n\n"
+
+        yield f"data: <|endoftext|>\n\n"
 
 class QueryRequest(BaseModel):
     query: str
