@@ -3,3 +3,4 @@ model/Phi-3.5-mini-instruct-Q4_K_L.gguf:Zone.Identifier
 model/zephyr-7b-beta.Q4_0.gguf
 model/zephyr-7b-beta.Q4_0.gguf:Zone.Identifier
 src/__pycache__/*.py[cod]
+src/__pycache__/main.cpython-310.pyc
