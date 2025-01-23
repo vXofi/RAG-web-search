@@ -17,7 +17,6 @@ import json
 """
 TODO:
 when retrieving numerical data it is not explicitly similar to query
-no prints in console after first message
 somehow model answers with markdown when markdown is mentioned in query
 """
 
@@ -240,7 +239,7 @@ async def rag_endpoint(query: str):
         Assistant: Paris is the capital of France."""
         }, {"role": "user", "content": f"Query: {query}"}]
 
-        print("evaluating query")
+        print("Evaluating query")
 
         decision_response = chat_model.create_chat_completion(
             messages=decision_prompt_messages,
