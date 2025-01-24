@@ -1,17 +1,15 @@
 marked.setOptions({
-    breaks: true,
-    gfm: true,
+    breaks: false,
     mangle: false,
     headerIds: false,
-    langPrefix: 'language-',
-    pedantic: false,
-    smartLists: true,
-    smartypants: false
+    gfm: true,
+    langPrefix: 'language-'
 });
 
 const typingAnimation = () => {
     const cursor = document.createElement('span');
     cursor.className = 'typing-cursor';
+    // cursor.innerHTML = '▋';
     return cursor;
 };
 
@@ -22,13 +20,6 @@ const debounce = (func, wait) => {
         timeout = setTimeout(() => func.apply(this, args), wait);
     };
 };
-
-function preserveListStructure(text) {
-    return text
-        .replace(/(\d+)\. /g, '\n$1. ')
-        .replace(/(\n\d+\. )/g, '\n\n$1')
-        .replace(/(\n)- /g, '\n\n- ');
-}
 
 document.addEventListener('DOMContentLoaded', () => {
     const chatLog = document.getElementById('chat-log');
@@ -82,8 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (assistantMessageDiv) {
             const cursors = assistantMessageDiv.getElementsByClassName('typing-cursor');
             while(cursors.length > 0) {
-                cursors[0].classList.add('hidden');
-                setTimeout(() => cursors[0].remove(), 200);
+                cursors[0].remove();
             }
         }
     }
@@ -94,55 +84,26 @@ document.addEventListener('DOMContentLoaded', () => {
             requestAnimationFrame(() => {
                 removeCursor();
                 
-                if (eventSource && eventSource.readyState !== EventSource.CLOSED) {
-                    let formatted = currentAssistantMessage
-                        // newlines before list items
-                        .replace(/(\S)(\n\d+\.)/g, '$1\n$2')
-                        // double newlines between paragraphs
-                        .replace(/(\n\n)(?=\S)/g, '\n\n\n')
-                        // protect code blocks
-                        .replace(/(```[\w]*\n)([^\n`]+)/g, '$1$2\n');
-        
-                    contentDiv.innerHTML = marked.parse(formatted, {
-                        breaks: false,
-                        gfm: true,
-                        mangle: false
-                    });
-        
-                    contentDiv.querySelectorAll('li').forEach(li => {
-                        if (!li.textContent.includes('\n')) {
-                            li.innerHTML = li.innerHTML.replace(/(\S)(<br>|$)/, '$1\n$2');
-                        }
-                    });
-                    appendCursor();
-                }
-    
+                let formatted = currentAssistantMessage
+                    // Handle code block starts
+                    .replace(/(```[\w]*)([^\n`])/g, '$1\n$2')
+                    // Handle list items
+                    .replace(/(\n|^)(\*|\d+\.) ([^\n]*)/g, '$1$2 $3\n')
+                    // Fix broken headers
+                    .replace(/(\n|^)#+([^\n#]*)$/gm, (m, p1, p2) => `${p1}#${p2.trim()}\n`);
+
+                const openCodeBlocks = (formatted.match(/```/g) || []).length % 2;
+                if (openCodeBlocks) formatted += '\n```';
+
+                contentDiv.innerHTML = marked.parse(formatted);
+                
+                appendCursor();
+                
                 isRendering = false;
                 renderQueue = [];
             });
         }
     }, 100);
-
-    eventSource.addEventListener('close', () => {
-        console.log("SSE stream closed by server.");
-        loadingIndicator.style.display = 'none';
-        
-        // Force a final render and remove cursor
-        processTokens(); // Process any remaining tokens
-        removeCursor();  // Explicitly remove cursor
-        eventSource.close();
-        
-        // Add slight delay for final animation
-        setTimeout(removeCursor, 100);
-    });
-
-    function addUserMessage(message) {
-        const messageDiv = document.createElement('div');
-        messageDiv.classList.add('message', 'user-message');
-        messageDiv.textContent = message;
-        chatLog.appendChild(messageDiv);
-        chatLog.scrollTop = chatLog.scrollHeight;
-    }
 
     async function sendMessage() {
         const query = queryInput.value.trim();
@@ -182,11 +143,6 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         eventSource.onmessage = (event) => {
-            if (event.data === '<|endoftext|>') {
-                eventSource.close();
-                return;
-            }
-            
             const token = event.data;
             currentAssistantMessage += token;
             renderQueue.push(token);
@@ -202,6 +158,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function addUserMessage(message) {
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('message', 'user-message');
+        messageDiv.textContent = message;
+        chatLog.appendChild(messageDiv);
+        chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
     function addSystemMessage(message) {
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', 'system-message');
@@ -209,9 +173,4 @@ document.addEventListener('DOMContentLoaded', () => {
         chatLog.appendChild(messageDiv);
         chatLog.scrollTop = chatLog.scrollHeight;
     }
-
-    function isStreaming() {
-        return eventSource && eventSource.readyState === EventSource.OPEN;
-    }
-
 });

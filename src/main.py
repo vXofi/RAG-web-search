@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
 
     print("Startup: Initializing Playwright")
     playwright_instance = await async_playwright().start()
-    browser = await playwright_instance.firefox.launch(headless=True)
+    browser = await playwright_instance.firefox.launch(headless=False)
 
     print("Loading model...")
     my_model_path = "./model/Phi-3.5-mini-instruct-Q4_K_L.gguf"
@@ -59,9 +59,8 @@ headers = {"user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
 
 
 async def ddg_search(query, tokenizer):
-    """Performs a DuckDuckGo search and returns relevant content."""
     query = query.replace('"', '')
-    results = DDGS(headers=headers).text(query, max_results=10)
+    results = DDGS(headers=headers).text(query, max_results=5)
     urls = [result['href'] for result in results]
 
     docs = await get_page(urls)
@@ -198,8 +197,6 @@ def generate_answer_stream(query, context, model,
 
             yield f"data: {token}\n\n"
 
-        yield f"data: <|endoftext|>\n\n"
-
 class QueryRequest(BaseModel):
     query: str
 
@@ -286,15 +283,18 @@ async def rag_endpoint(query: str):
                         context = "\n\n".join(top_snippets)
                         print("Generating answer stream with web search context")
 
-                        return StreamingResponse(generate_answer_stream(query, context, chat_model), media_type="text/event-stream")
+                        return StreamingResponse(generate_answer_stream(query, context, chat_model), media_type="text/event-stream",
+                                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
                     else:
-                        return StreamingResponse(generate_answer_stream(query, "No relevant web content found.", chat_model), media_type="text/event-stream")
+                        return StreamingResponse(generate_answer_stream(query, "No relevant web content found.", chat_model), media_type="text/event-stream",
+                                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             else:
                 raise ValueError
 
         except (ValueError, json.JSONDecodeError):
             print("Model decided to answer without web search.")
-            return StreamingResponse(generate_answer_stream(query, "", chat_model), media_type="text/event-stream")
+            return StreamingResponse(generate_answer_stream(query, "", chat_model), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         
     except Exception as e:
         print(f"Error during RAG processing: {e}")
