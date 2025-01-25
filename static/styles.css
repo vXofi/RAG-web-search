@@ -115,11 +115,9 @@ body {
 
 .message-content pre {
     white-space: pre-wrap;
-    background: rgba(0, 0, 0, 0.3) !important;
-    padding: 1rem !important;
+    font-family: inherit;
     border-radius: 8px;
     margin: 1em 0;
-    overflow-x: auto;
 }
 
 .message-content code {
@@ -128,7 +126,7 @@ body {
 }
 
 .message-content pre code {
-    white-space: pre !important;
+    white-space: pre;
     display: block;
     overflow-x: auto;
     padding: 1em;

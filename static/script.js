@@ -1,176 +1,122 @@
 marked.setOptions({
-    breaks: false,
+    breaks: true,
+    gfm: true,
     mangle: false,
     headerIds: false,
-    gfm: true,
-    langPrefix: 'language-'
+    smartLists: true,
+    smartypants: false
 });
 
 const typingAnimation = () => {
     const cursor = document.createElement('span');
     cursor.className = 'typing-cursor';
-    // cursor.innerHTML = '▋';
     return cursor;
 };
 
-const debounce = (func, wait) => {
-    let timeout;
-    return (...args) => {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => func.apply(this, args), wait);
-    };
-};
+function preserveListStructure(text) {
+    return text
+        .replace(/(\d+)\. /g, '\n$1. ')
+        .replace(/(\n\d+\. )/g, '\n\n$1')
+        .replace(/(\n)- /g, '\n\n- ');
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     const chatLog = document.getElementById('chat-log');
     const queryInput = document.getElementById('query-input');
     const sendButton = document.getElementById('send-button');
     const loadingIndicator = document.getElementById('loading-indicator');
+    
     let eventSource = null;
     let currentAssistantMessage = "";
     let assistantMessageDiv = null;
     let contentDiv = null;
-    let renderQueue = [];
-    let isRendering = false;
+    let streamingText = null;
 
-    sendButton.addEventListener('click', sendMessage);
-    queryInput.addEventListener('keypress', (event) => {
-        if (event.key === 'Enter') {
-            sendMessage();
-        }
-    });
-
-    function appendCursor() {
-        const walker = document.createTreeWalker(
-            contentDiv, 
-            NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
-            { acceptNode: (node) => 
-                node.nodeType === Node.ELEMENT_NODE || 
-                (node.nodeType === Node.TEXT_NODE && node.textContent.trim())
-                ? NodeFilter.FILTER_ACCEPT 
-                : NodeFilter.FILTER_REJECT 
-            }
-        );
-
-        let lastNode = null;
-        while (walker.nextNode()) lastNode = walker.currentNode;
-
-        if (lastNode) {
-            if (lastNode.nodeType === Node.TEXT_NODE) {
-                const wrapper = document.createElement('span');
-                wrapper.style.display = 'inline-block';
-                wrapper.appendChild(document.createTextNode(lastNode.textContent));
-                lastNode.parentNode.replaceChild(wrapper, lastNode);
-                lastNode = wrapper;
-            }
-            lastNode.after(typingAnimation());
-        } else {
+    const appendCursor = () => {
+        const existingCursors = contentDiv.getElementsByClassName('typing-cursor');
+        if (existingCursors.length === 0) {
             contentDiv.appendChild(typingAnimation());
         }
-    }
+    };
 
-    function removeCursor() {
-        if (assistantMessageDiv) {
-            const cursors = assistantMessageDiv.getElementsByClassName('typing-cursor');
-            while(cursors.length > 0) {
-                cursors[0].remove();
-            }
+    const removeCursor = () => {
+        const cursors = contentDiv.getElementsByClassName('typing-cursor');
+        while(cursors.length > 0) {
+            cursors[0].remove();
         }
-    }
+    };
 
-    const processTokens = debounce(() => {
-        if (!isRendering) {
-            isRendering = true;
-            requestAnimationFrame(() => {
-                removeCursor();
-                
-                let formatted = currentAssistantMessage
-                    // Handle code block starts
-                    .replace(/(```[\w]*)([^\n`])/g, '$1\n$2')
-                    // Handle list items
-                    .replace(/(\n|^)(\*|\d+\.) ([^\n]*)/g, '$1$2 $3\n')
-                    // Fix broken headers
-                    .replace(/(\n|^)#+([^\n#]*)$/gm, (m, p1, p2) => `${p1}#${p2.trim()}\n`);
+    const addUserMessage = (message) => {
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('message', 'user-message');
+        messageDiv.textContent = message;
+        chatLog.appendChild(messageDiv);
+    };
 
-                const openCodeBlocks = (formatted.match(/```/g) || []).length % 2;
-                if (openCodeBlocks) formatted += '\n```';
+    sendButton.addEventListener('click', () => sendMessage());
+    queryInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') sendMessage();
+    });
 
-                contentDiv.innerHTML = marked.parse(formatted);
-                
-                appendCursor();
-                
-                isRendering = false;
-                renderQueue = [];
-            });
-        }
-    }, 100);
-
-    async function sendMessage() {
+    function sendMessage() {
         const query = queryInput.value.trim();
         if (!query) return;
 
-        addUserMessage(query);
+        if (eventSource) eventSource.close();
         queryInput.value = '';
-
-        loadingIndicator.style.display = 'block';
-        chatLog.scrollTop = chatLog.scrollHeight;
+        currentAssistantMessage = '';
+        addUserMessage(query);
 
         assistantMessageDiv = document.createElement('div');
         assistantMessageDiv.classList.add('message', 'assistant-message');
         contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
+        streamingText = document.createElement('pre');
+        streamingText.style.whiteSpace = 'pre-wrap';
+        
+        contentDiv.appendChild(streamingText);
         assistantMessageDiv.appendChild(contentDiv);
         chatLog.appendChild(assistantMessageDiv);
-        currentAssistantMessage = "";
-
-        if (eventSource) {
-            eventSource.close();
-        }
-
+        loadingIndicator.style.display = 'block';
+        
         eventSource = new EventSource(`/rag?query=${encodeURIComponent(query)}`);
 
         eventSource.onopen = () => {
             loadingIndicator.style.display = 'none';
-        };
-
-        eventSource.onerror = (error) => {
-            console.warn("SSE connection closed by server (normal).", error);
-            loadingIndicator.style.display = 'none';
-            removeCursor();
-            if (eventSource) {
-                eventSource.close();
-            }
+            appendCursor();
         };
 
         eventSource.onmessage = (event) => {
             const token = event.data;
             currentAssistantMessage += token;
-            renderQueue.push(token);
-            processTokens();
-            chatLog.scrollTop = chatLog.scrollHeight;
+            streamingText.textContent += token;
+            removeCursor();
+            appendCursor();
+            
+            const scrollThreshold = 100;
+            const nearBottom = chatLog.scrollHeight - chatLog.clientHeight <= chatLog.scrollTop + scrollThreshold;
+            if (nearBottom) {
+                chatLog.scrollTop = chatLog.scrollHeight;
+            }
         };
 
-        eventSource.addEventListener('close', () => {
-            console.log("SSE stream closed by server.");
+        eventSource.onerror = (error) => {
+            console.error('SSE error:', error);
             loadingIndicator.style.display = 'none';
             removeCursor();
             eventSource.close();
+        };
+
+        eventSource.addEventListener('close', () => {
+            const formatted = marked.parse(preserveListStructure(currentAssistantMessage));
+            contentDiv.removeChild(streamingText);
+            contentDiv.innerHTML = formatted;
+            removeCursor();
+            eventSource.close();
+            
+            requestAnimationFrame(() => {
+                chatLog.scrollTop = chatLog.scrollHeight;
+            });
         });
-    }
-
-    function addUserMessage(message) {
-        const messageDiv = document.createElement('div');
-        messageDiv.classList.add('message', 'user-message');
-        messageDiv.textContent = message;
-        chatLog.appendChild(messageDiv);
-        chatLog.scrollTop = chatLog.scrollHeight;
-    }
-
-    function addSystemMessage(message) {
-        const messageDiv = document.createElement('div');
-        messageDiv.classList.add('message', 'system-message');
-        messageDiv.innerHTML = marked.parse(message);
-        chatLog.appendChild(messageDiv);
-        chatLog.scrollTop = chatLog.scrollHeight;
     }
 });
